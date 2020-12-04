@@ -7,5 +7,9 @@ Ideas:
 - Extensive vs. intensive margin: Are results driven by people switching jobs (new at_counterparty) or income changes within job (same at_counterparty)
 - Can I detect presence of children? ideas: infer from EIP payments, dollars spent on child products (do MCC codes go granular enough?)
 
+Papers to read:
+- anything Shift Project or Susan Lambert
+- Card and Kruueger 1994 minimum wage
+- Derenoncourt and Montileux 2020 QJE
 Future project:
--if income volatility is affected, can use this to instrument for volatility stabilization to look at child outcomes
+- if income volatility is affected, can use this to instrument for volatility stabilization to look at child outcomes
