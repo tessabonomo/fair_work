@@ -1,3 +1,7 @@
+#BBB Question: why are incomes so high? Answer: mainly droping old households
+#BBB Question: should I winsorize income?
+#BBB Question: should I filter managers?
+#BBB Check: Industries - why are affected industries higher paying?
 #-------------------------------------------------------------------------------
 # Import libraries
 
@@ -36,6 +40,21 @@ cpi <-
          inflator = c(0.741, 0.726, 0.715, 0.704,
                       0.703, 0.694, 0.679, 0.663, 0.652) * 	1.507)
 
+inc_max <-
+  df_full %>%
+  filter(year != 2012,
+         asecflag == 1)  %>%
+  summarise(wtd.quantile(hhincome, asecwth, 0.975)) %>%
+  pull()
+
+ind_desc <-
+  read_csv("~/repo/fair_work/analysis/input/industry.csv")
+
+ind90_desc <-
+  read_csv("~/repo/fair_work/analysis/input/industry90.csv")
+
+occ_desc <-
+  read_csv("~/repo/fair_work/analysis/input/occupation.csv")
 
 #-------------------------------------------------------------------------------
 
@@ -43,11 +62,14 @@ cpi <-
 
 df_clean <-
   df_full %>%
+  group_by(year, serial, pernum) %>%
+  mutate(numjob = max(numjob)) %>%
   filter(year != 2012,
          between(age, min_age, max_age),
          asecflag == 1) %>% 
   inner_join(cpi, by = "year") %>% 
   mutate(hhincome = hhincome*inflator,
+         hhincome = ifelse(hhincome > inc_max, inc_max, hhincome),
          unemp = case_when(empstat %in% c(10, 12) ~ 0,
                          empstat %in% c(20, 21, 22) ~ 1,
                          T ~ NA_real_),
@@ -80,6 +102,8 @@ df_industry_workers <-
   filter(hhincome < 9999999 * inflator,
          hhincome >= 0,
          ind90ly %in% ind90_list) %>%
+  left_join(occ_desc) %>%
+  filter(!str_detect(occ_desc, "manager")) %>%
   group_by(serial) %>%
   filter(pernum == min(pernum)) %>%
   ungroup() 
@@ -134,69 +158,22 @@ df_agg <-
 
 #-------------------------------------------------------------------------------
 
-#Workers between 25 and 65 with non-missing income in retail, food, and hospitality
-# df_workers <-
-#   df_full %>%
-#   inner_join(cpi, by = "year") %>%
-#   select(age, relate, nchild, sex, statefip, hhincome, marst, occly, indly, ind90ly, ind50ly, year, month,
-#          race, hispan, serial, asecwth, county, hrhhid, hrhhid2, hseq, asecwt, asecwth,
-#          pernum, popstat, famsize, educ, empstat, uhrsworkly, ownershp, paidhour,
-#          metarea, multjob, asecflag, inflator) %>%
-#   filter(between(age, min_age, max_age),
-#          !is.na(hhincome),
-#          hhincome < 9999999 * inflator,
-#          ind90ly %in% ind90_list,
-#          hhincome >= 0) %>%
-#   group_by(serial) %>%
-#   filter(pernum == min(pernum)) %>%
-#   ungroup() %>%
-#   mutate(hhincome = hhincome*inflator,
-#          post_announce = year > 2017,
-#          post_effective = year > 2018,
-#          emp = case_when(empstat %in% c(10, 12) ~ 1,
-#                          empstat %in% c(20, 21, 22) ~ 0,
-#                          T ~ NA_real_),
-#          labor_force = case_when(empstat %in% c(10, 12, 20, 21, 22) ~ 1,
-#                                  empstat %in% c(32, 34, 36) ~ 0,
-#                                  T ~ NA_real_),
-#          black = race == 200,
-#          white = race == 100,
-#          asian = race %in% c(650, 651, 652),
-#          hispan = case_when(hispan == 000 ~ 0,
-#                             hispan < 700 ~ 1, 
-#                             T ~ NA_real_), 
-#          single = case_when(marst %in% c(3, 4, 5, 6, 7) ~ 1,
-#                             marst == 9 ~ NA_real_,
-#                             T ~ 0),
-#          married = case_when(marst %in% c(1,2) ~ 1,
-#                              marst == 9 ~ NA_real_,
-#                              T ~ 0),
-#          ln_income = log(hhincome),
-#          owns_home = ownershp == 10,
-#          hourly_worker = case_when(paidhour == 2 ~ 1,
-#                                    paidhour == 1 ~ 0,
-#                                    T ~ NA_real_),
-#          state_county = str_c(statefip, county),
-#          metarea = statefip*10000 + metarea,
-#          effective_year = year - 1)
-
-
-
-#-------------------------------------------------------------------------------
-
 industries <- 
   df_industry_workers %>% 
-  group_by(indly) %>%
+  group_by(indly, ind90ly) %>%
   summarise(n = n(),
             share_hourly = weighted.mean(hourly_worker, asecwt, na.rm = T),
             num_w_hour = sum(!is.na(hourly_worker))) %>%
   mutate(share_hourly = ifelse(num_w_hour <= 20, NA_real_, share_hourly)) %>%
-  select(indly, share_hourly)
+  select(indly, ind90ly, share_hourly) %>%
+  left_join(ind_desc) %>%
+  left_join(ind90_desc)
 
 occupations <- 
   df_industry_workers %>% 
   group_by(occly) %>%
-  summarise(n = n())
+  summarise(n = n()) %>%
+  left_join(occ_desc)
 
 
 
@@ -226,7 +203,7 @@ synth_func <- function(state, predictors){
     generate_predictor(time_window = 2012,
                        ln_income_industry_2012 = ln_income_industry) %>%
     generate_predictor(time_window = 2013,
-                       ln_income_industry_2011 = ln_income_industry) %>%
+                       ln_income_industry_2013 = ln_income_industry) %>%
     generate_predictor(time_window = 2014,
                        ln_income_industry_2014 = ln_income_industry) %>%
     generate_predictor(time_window = 2015,
@@ -241,69 +218,46 @@ synth_func <- function(state, predictors){
   output
 }
 
-#   out_df2 <-
-#     output2 %>% 
-#     grab_synthetic_control() %>%
-#     # grab_synthetic_control(placebo = T) %>%
-#     mutate(metarea = metro)
-#   
-#   out_df
-# }
+# Create synthetic Oregon
+synthetic_oregon <- 
+  synth_func("41", predictor_list)
 
+# Create balance table
+balance_table <-
+  synthetic_oregon %>%
+  grab_balance_table()
 
-state <- synth_func("41", predictor_list)
-
-state %>% grab_balance_table()
-
-state %>% plot_trends()
-
-state %>% plot_differences()
-
-state %>%
-  plot_placebos() +
+# Plot trends
+synthetic_oregon %>% 
+  plot_trends() +
   ylab("Log income in affected industries") +
+  xlab("Year") +
+  ggtitle("Log income in affected industries (2018 dollars)") +
+  scale_color_manual(values = c("#b41e7c", "grey60"),  labels=c('Real Oregon', 'Synthetic Oregon'))+
+  scale_linetype_manual(values = c(1, 4),  labels=c('Real Oregon', 'Synthetic Oregon'))
+
+# Plot differences
+synthetic_oregon %>%
+  plot_differences() +
+  ylab("Change in log income in affected industries") +
+  xlab("Year") +
+  ggtitle("Change in log income in affected industries") 
+
+# Plot placebos
+synthetic_oregon %>%
+  plot_placebos() +
+  ylab("Change in log income in affected industries") +
   xlab("Year") +
   ggtitle("Change in log income in affected industries") +
   scale_color_manual(values = c("#b41e7c", "grey60"),  labels=c('Oregon', 'Placebos'))+
   scale_alpha_manual(values = c(1, 0.4),  labels=c('Oregon', 'Placebos')) +
   scale_size_manual(values = c(1, 0.5),  labels=c('Oregon', 'Placebos'))
   
+# Create weight table
+weights_table <- 
+  synthetic_oregon %>%
+  grab_unit_weights() %>%
+  filter(weight > 0.01)
 
-t <- state %>% grab_unit_weights()
-
-
-plot_df <-
-  out_df2 %>%
-  rename(effective_year = "time_unit") %>%
-  left_join(pop, by = c("metarea", "effective_year"))%>%
-  group_by(effective_year) %>%
-  summarise(synth_y = weighted.mean(synth_y, weight),
-            real_y = weighted.mean(real_y, weight))
-
-ggplot(plot_df, aes(x = effective_year))+
-  geom_line(aes(y = real_y))+
-  geom_line(aes(y = synth_y))
-
-
-output <-
-  county_level_df %>%
-  synthetic_control(outcome = ln_income, # outcome
-                    unit = metarea, # unit index in the panel data
-                    time = year, # time index in the panel data
-                    i_unit = "6442", # unit where the intervention occurred
-                    i_time = 2018, # time period when the intervention occurred
-                    generate_placebos=T) %>%
-  generate_predictor(time_window = 2012:2017,
-                     across(var_list, ~ mean(.x, na.rm = T))) %>%
-  generate_weights(optimization_window = 2012:2017, # time to use in the optimization task
-                   margin_ipop = .02,sigf_ipop = 7,bound_ipop = 6 # optimizer options
-  ) %>%
-  generate_control()
-
-output %>% grab_balance_table()
-output %>% plot_trends()
-output %>% plot_placebos()
-output %>% plot_mspe_ratio()
-t <- output %>% grab_unit_weights()
-
-output %>% grab_synthetic_control()
+synthetic_oregon %>%
+  grab_predictor_weights()
