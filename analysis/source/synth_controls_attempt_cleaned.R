@@ -11,6 +11,7 @@ library(stargazer)
 library(haven)
 library(Hmisc)
 library(tidysynth)
+library(tidycensus)
 
 # Set parameters
 
@@ -56,6 +57,55 @@ ind_desc <- read_csv("~/repo/fair_work/analysis/input/industry.csv")
 ind90_desc <- read_csv("~/repo/fair_work/analysis/input/industry90.csv")
 
 occ_desc <- read_csv("~/repo/fair_work/analysis/input/occupation.csv")
+
+state_fips <- read_csv("~/repo/fair_work/analysis/input/statefips.csv")
+  
+# Create list of predictor variables
+predictor_list <- c("ln_income", "unemp", "in_affected_ind") 
+# predictor_list <- c("ln_income", "unemp", "in_affected_ind", "age", "female") #add education
+
+
+
+plot_placebos_5 <- function (data, time_window = NULL, prune = TRUE) 
+{
+  if (!(".meta" %in% colnames(data))) {
+    stop("`.meta` column has been removed. `.meta` column needs to be included for `generte_control()` to work.")
+  }
+  trt_time <- data$.meta[[1]]$treatment_time[1]
+  time_index <- data$.meta[[1]]$time_index[1]
+  treatment_unit <- data$.meta[[1]]$treatment_unit[1]
+  unit_index <- data$.meta[[1]]$unit_index[1]
+  outcome_name <- data$.meta[[1]]$outcome[1]
+  if (is.null(time_window)) {
+    time_window <- unique(data$.original_data[[1]][[time_index]])
+  }
+  plot_data <- data %>% grab_synthetic_control(placebo = TRUE) %>% 
+    dplyr::mutate(diff = real_y - synth_y) %>% dplyr::filter(time_unit %in% 
+                                                               time_window) %>% dplyr::mutate(type_text = ifelse(.placebo == 
+                                                                                                                   0, treatment_unit, "control units"), type_text = factor(type_text, 
+                                                                                                                                                                           levels = c(treatment_unit, "control units")))
+  caption <- ""
+  if (prune) {
+    sig_data = data %>% grab_signficance(time_window = time_window)
+    thres <- sig_data %>% dplyr::filter(type == "Treated") %>% 
+      dplyr::pull(pre_mspe) %>% sqrt(.)
+    retain_ <- sig_data %>% dplyr::select(unit_name, pre_mspe) %>% 
+      dplyr::filter(sqrt(pre_mspe) <= thres * 5) %>% dplyr::pull(unit_name)
+    plot_data <- plot_data %>% dplyr::filter(.id %in% retain_)
+    caption <- "Pruned all placebo cases with a pre-period RMSPE exceeding two times the treated unit's pre-period RMSPE."
+  }
+  plot_data %>% ggplot2::ggplot(ggplot2::aes(time_unit, diff, 
+                                             group = .id, color = type_text, alpha = type_text, size = type_text)) + 
+    ggplot2::geom_hline(yintercept = 0, color = "black", 
+                        linetype = 2) + ggplot2::geom_vline(xintercept = trt_time, 
+                                                            color = "black", linetype = 3) + ggplot2::geom_line() + 
+    ggplot2::scale_color_manual(values = c("#b41e7c", "grey60")) + 
+    ggplot2::scale_alpha_manual(values = c(1, 0.4)) + ggplot2::scale_size_manual(values = c(1, 
+                                                                                            0.5)) + ggplot2::labs(color = "", alpha = "", size = "", 
+                                                                                                                  y = outcome_name, x = time_index, title = paste0("Difference of each '", 
+                                                                                                                                                                   unit_index, "' in the donor pool"), caption = caption) + 
+    ggplot2::theme_minimal() + ggplot2::theme(legend.position = "bottom")
+}
 
 #-------------------------------------------------------------------------------
 ### ASEC analysis (age, race, sex, income, industry of employment)
@@ -228,44 +278,9 @@ occupations <-
 
 #-------------------------------------------------------------------------------
 
-# Create list of predictor variables
-predictor_list <- c("ln_income", "unemp", "in_affected_ind") #add education
-# predictor_list <- c("ln_income", "unemp", "in_affected_ind", "age", "female") #add education
+### INCOME RESULTS
 
-
-# Function that creates synthetic control
-synth_func_numjobs <- function(state, predictors){
-  
-  output <-
-    df_agg %>%
-    synthetic_control(outcome = more_than_one_job, # outcome
-                      unit = statefip, # unit index in the panel data
-                      time = effective_year, # time index in the panel data
-                      i_unit = state, # unit where the intervention occurred
-                      i_time = 2017, # time period when the intervention occurred
-                      generate_placebos=T) %>%
-    generate_predictor(time_window = 2012:2016,
-                       across(predictors, ~ mean(.x, na.rm = T))) %>%
-    generate_predictor(time_window = 2012,
-                       numjobs_2012 = more_than_one_job) %>%
-    generate_predictor(time_window = 2013,
-                       numjobs_2013 = more_than_one_job) %>%
-    generate_predictor(time_window = 2014,
-                       numjobs_2014 = more_than_one_job) %>%
-    generate_predictor(time_window = 2015,
-                       numjobs_2015 = more_than_one_job) %>%
-    generate_predictor(time_window = 2016,
-                       numjobs_2016 = more_than_one_job) %>%
-    generate_weights(optimization_window = 2012:2016, # time to use in the optimization task
-                     margin_ipop = .02,sigf_ipop = 7,bound_ipop = 6 # optimizer options
-    ) %>%
-    generate_control()
-  
-  output
-}
-
-
-# Function that creates synthetic control
+# Function that creates synthetic control for income
 synth_func_income<- function(state, predictors){
   
   output <-
@@ -289,47 +304,69 @@ synth_func_income<- function(state, predictors){
     generate_predictor(time_window = 2016,
                        ln_income_industry_2016 = ln_income_industry) %>%
     generate_weights(optimization_window = 2012:2016, # time to use in the optimization task
-                     margin_ipop = .02,sigf_ipop = 7,bound_ipop = 6 # optimizer options
+                     #margin_ipop = .02,sigf_ipop = 7,bound_ipop = 6 # optimizer options
     ) %>%
     generate_control()
   
   output
 }
 
-# Create synthetic Oregon Income
-
+# Create synthetic Oregon for income analysis
 synthetic_oregon_income <- 
   synth_func_income("41", predictor_list)
 
 # Create balance table
-balance_table <-
+balance_table_income <-
   synthetic_oregon_income %>%
   grab_balance_table()
 
 # Plot trends
 synthetic_oregon_income %>% 
   plot_trends() +
-  ylab("Log income in affected industries") +
+  ylab("Log household income") +
   xlab("Year") +
-  ggtitle("Log income in affected industries (2018 dollars)") +
+  ggtitle("") +
   scale_color_manual(values = c("#b41e7c", "grey60"),  labels=c('Real Oregon', 'Synthetic Oregon'))+
-  scale_linetype_manual(values = c(1, 4),  labels=c('Real Oregon', 'Synthetic Oregon'))
+  scale_linetype_manual(values = c(1, 4),  labels=c('Real Oregon', 'Synthetic Oregon')) +
+  ylim(c(10.7, 11.2)) +
+  geom_vline(xintercept = 2018, color = "black", linetype = 2) +
+  labs(caption = "")
+
+ggsave("~/repo/fair_work/analysis/output/income_trends.png", w = 8, h = 5)
 
 # Plot placebos
 synthetic_oregon_income %>%
   plot_placebos_5() +
-  ylab("Change in log income in affected industries") +
+  ylab("Change in log household income") +
   xlab("Year") +
-  ggtitle("Change in log income in affected industries") +
+  ggtitle("") +
   scale_color_manual(values = c("#b41e7c", "grey60"),  labels=c('Oregon', 'Placebos'))+
   scale_alpha_manual(values = c(1, 0.4),  labels=c('Oregon', 'Placebos')) +
-  scale_size_manual(values = c(1, 0.5),  labels=c('Oregon', 'Placebos'))
+  scale_size_manual(values = c(1, 0.5),  labels=c('Oregon', 'Placebos')) +
+  geom_vline(xintercept = 2018, color = "black", linetype = 3) +
+  labs(caption = "")
+
+ggsave("~/repo/fair_work/analysis/output/income_placebos.png", w = 8, h = 5)
 
 # Create weight table
 weights_table_inc <- 
   synthetic_oregon_income %>%
   grab_unit_weights() %>%
-  filter(weight > 0.01)
+  filter(weight > 0.01) %>%
+  mutate(statefip = as.numeric(unit),
+         weight = round(weight, digits = 3)) %>%
+  left_join(state_fips) %>%
+  transmute(`State` = stname,
+            Weight = weight) %>%
+  arrange(desc(Weight))
+
+
+stargazer(weights_table_inc, 
+          type = "latex",
+          summary = F, 
+          rownames = FALSE,
+          out = "~/repo/fair_work/analysis/output/inc_weight_table.tex")
+
 
 synthetic_oregon_income %>%
   grab_predictor_weights()
@@ -338,39 +375,116 @@ synthetic_oregon_income %>%
 t <-
   synthetic_oregon_income %>% grab_signficance() 
 
-ggplot(t, aes(y = mspe_ratio))+
-  geom_histogram() +
-  geom_hline(yintercept = 11.6816117)
+ggplot(t, aes(x = mspe_ratio))+
+  geom_histogram(bins = 100) +
+  geom_vline(xintercept = 28.5862559, color = "black", linetype = 2) +
+  theme_minimal() +
+  ylab("Frequency") +
+  xlab("RMSPE")
+
+treat_inc <-
+  synthetic_oregon_income %>% 
+  grab_synthetic_control() %>%
+  mutate(post = time_unit >= 2017) %>%
+  group_by(post) %>%
+  summarise(real = mean(real_y),
+            synth = mean(synth_y)) %>%
+  mutate(first_diff = real - synth) %>%
+  summarise(att_income = last(first_diff) - first(first_diff)) %>%
+  pull
+
+pval_inc <-
+  synthetic_oregon_income %>%
+  grab_signficance() %>%
+  filter(unit_name == "41") %>%
+  select(fishers_exact_pvalue) %>%
+  pull
 
 # Create synthetic Oregon Num jobs 
+synth_func_numjobs <- function(state, predictors){
+  
+  output <-
+    df_agg %>%
+    synthetic_control(outcome = more_than_one_job, # outcome
+                      unit = statefip, # unit index in the panel data
+                      time = effective_year, # time index in the panel data
+                      i_unit = state, # unit where the intervention occurred
+                      i_time = 2017, # time period when the intervention occurred
+                      generate_placebos=T) %>%
+    generate_predictor(time_window = 2012:2016,
+                       across(predictors, ~ mean(.x, na.rm = T))) %>%
+    generate_predictor(time_window = 2012,
+                       numjobs_2012 = more_than_one_job) %>%
+    generate_predictor(time_window = 2013,
+                       numjobs_2013 = more_than_one_job) %>%
+    generate_predictor(time_window = 2014,
+                       numjobs_2014 = more_than_one_job) %>%
+    generate_predictor(time_window = 2015,
+                       numjobs_2015 = more_than_one_job) %>%
+    generate_predictor(time_window = 2016,
+                       numjobs_2016 = more_than_one_job) %>%
+    generate_weights(optimization_window = 2012:2016, # time to use in the optimization task
+                     # margin_ipop = .02,sigf_ipop = 7,bound_ipop = 6 # optimizer options
+    ) %>%
+    generate_control()
+  
+  output
+}
 
 synthetic_oregon_numjobs <- 
   synth_func_numjobs("41", predictor_list)
 
+# Create balance table
+balance_table_numjobs <-
+  synthetic_oregon_numjobs %>%
+  grab_balance_table()
+
 # Plot trends
 synthetic_oregon_numjobs %>% 
   plot_trends() +
-  ylab("Average number of jobs held in affected industries") +
+  ylab("Share holding more than one job") +
   xlab("Year") +
-  ggtitle("Average number of jobs held in affected industries") +
+  ggtitle("") +
   scale_color_manual(values = c("#b41e7c", "grey60"),  labels=c('Real Oregon', 'Synthetic Oregon'))+
-  scale_linetype_manual(values = c(1, 4),  labels=c('Real Oregon', 'Synthetic Oregon'))
+  scale_linetype_manual(values = c(1, 4),  labels=c('Real Oregon', 'Synthetic Oregon')) +
+  ylim(c(0, 0.1)) +
+  geom_vline(xintercept = 2018, color = "black", linetype = 2) +
+  labs(caption = "")
+
+ggsave("~/repo/fair_work/analysis/output/job_trends.png", w = 8, h = 5)
 
 # Plot placebos
 synthetic_oregon_numjobs %>%
   plot_placebos_5(prune = T) +
-  ylab("Change in number of jobs") +
+  ylab("Change in share holding more than one job") +
   xlab("Year") +
-  ggtitle("Change in number of jobs in affected industries") +
+  ggtitle("") +
   scale_color_manual(values = c("#b41e7c", "grey60"),  labels=c('Oregon', 'Placebos'))+
   scale_alpha_manual(values = c(1, 0.4),  labels=c('Oregon', 'Placebos')) +
-  scale_size_manual(values = c(1, 0.5),  labels=c('Oregon', 'Placebos'))
+  scale_size_manual(values = c(1, 0.5),  labels=c('Oregon', 'Placebos')) +
+  geom_vline(xintercept = 2018, color = "black", linetype = 3) +
+  labs(caption = "")
+
+ggsave("~/repo/fair_work/analysis/output/job_placebos.png", w = 8, h = 5)
 
 # Create weight table
 weights_table_nj <- 
   synthetic_oregon_numjobs %>%
   grab_unit_weights() %>%
-  filter(weight > 0.01)
+  filter(weight > 0.01) %>%
+  mutate(statefip = as.numeric(unit),
+         weight = round(weight, digits = 3)) %>%
+  left_join(state_fips) %>%
+  transmute(`State` = stname,
+            Weight = weight) %>%
+  arrange(desc(Weight))
+
+stargazer(weights_table_nj, 
+          type = "latex",
+          summary = F, 
+          rownames = FALSE,
+          out = "~/repo/fair_work/analysis/output/jobs_weight_table.tex")
+
 
 synthetic_oregon_numjobs %>%
   grab_predictor_weights()
@@ -381,47 +495,72 @@ synthetic_oregon_numjobs %>% plot_mspe_ratio()
 t <-
   synthetic_oregon_numjobs %>% grab_signficance() 
 
-ggplot(t, aes(y = mspe_ratio))+
-  geom_histogram() +
-  geom_hline(yintercept = 13.8335183)
+treat_nj <-
+  synthetic_oregon_numjobs %>% 
+  grab_synthetic_control() %>%
+  mutate(post = time_unit >= 2017) %>%
+  group_by(post) %>%
+  summarise(real = mean(real_y),
+            synth = mean(synth_y)) %>%
+  mutate(first_diff = real - synth) %>%
+  summarise(att_income = last(first_diff) - first(first_diff)) %>%
+  pull
 
-plot_placebos_5 <- function (data, time_window = NULL, prune = TRUE) 
-{
-  if (!(".meta" %in% colnames(data))) {
-    stop("`.meta` column has been removed. `.meta` column needs to be included for `generte_control()` to work.")
-  }
-  trt_time <- data$.meta[[1]]$treatment_time[1]
-  time_index <- data$.meta[[1]]$time_index[1]
-  treatment_unit <- data$.meta[[1]]$treatment_unit[1]
-  unit_index <- data$.meta[[1]]$unit_index[1]
-  outcome_name <- data$.meta[[1]]$outcome[1]
-  if (is.null(time_window)) {
-    time_window <- unique(data$.original_data[[1]][[time_index]])
-  }
-  plot_data <- data %>% grab_synthetic_control(placebo = TRUE) %>% 
-    dplyr::mutate(diff = real_y - synth_y) %>% dplyr::filter(time_unit %in% 
-                                                               time_window) %>% dplyr::mutate(type_text = ifelse(.placebo == 
-                                                                                                                   0, treatment_unit, "control units"), type_text = factor(type_text, 
-                                                                                                                                                                           levels = c(treatment_unit, "control units")))
-  caption <- ""
-  if (prune) {
-    sig_data = data %>% grab_signficance(time_window = time_window)
-    thres <- sig_data %>% dplyr::filter(type == "Treated") %>% 
-      dplyr::pull(pre_mspe) %>% sqrt(.)
-    retain_ <- sig_data %>% dplyr::select(unit_name, pre_mspe) %>% 
-      dplyr::filter(sqrt(pre_mspe) <= thres * 5) %>% dplyr::pull(unit_name)
-    plot_data <- plot_data %>% dplyr::filter(.id %in% retain_)
-    caption <- "Pruned all placebo cases with a pre-period RMSPE exceeding two times the treated unit's pre-period RMSPE."
-  }
-  plot_data %>% ggplot2::ggplot(ggplot2::aes(time_unit, diff, 
-                                             group = .id, color = type_text, alpha = type_text, size = type_text)) + 
-    ggplot2::geom_hline(yintercept = 0, color = "black", 
-                        linetype = 2) + ggplot2::geom_vline(xintercept = trt_time, 
-                                                            color = "black", linetype = 3) + ggplot2::geom_line() + 
-    ggplot2::scale_color_manual(values = c("#b41e7c", "grey60")) + 
-    ggplot2::scale_alpha_manual(values = c(1, 0.4)) + ggplot2::scale_size_manual(values = c(1, 
-                                                                                            0.5)) + ggplot2::labs(color = "", alpha = "", size = "", 
-                                                                                                                  y = outcome_name, x = time_index, title = paste0("Difference of each '", 
-                                                                                                                                                                   unit_index, "' in the donor pool"), caption = caption) + 
-    ggplot2::theme_minimal() + ggplot2::theme(legend.position = "bottom")
-}
+pval_nj <-
+  synthetic_oregon_numjobs %>%
+  grab_signficance() %>%
+  filter(unit_name == "41") %>%
+  select(fishers_exact_pvalue) %>%
+  pull
+
+ggplot(t, aes(x = mspe_ratio))+
+  geom_histogram(bins = 100) +
+  geom_vline(xintercept = 12.32106869, color = "black", linetype = 2) +
+  theme_minimal() +
+  ylab("Frequency") +
+  xlab("RMSPE")
+
+
+#Ballance output
+
+balance_table <-
+  balance_table_income %>%
+  bind_rows(balance_table_numjobs %>% filter(str_detect(variable, "^num"))) %>%
+  mutate(across(c("41", "synthetic_41", "donor_sample"), ~round(.x, digits = 3))) %>%
+  rename(Variable = "variable") %>%
+  mutate(Variable = c("Share workers in affected industry",
+                      "Log household income (all workers)",
+                      "Unemployment rate",
+                      "Log household income (affected workers) - 2012",
+                      "Log household income (affected workers) - 2013",
+                      "Log household income (affected workers) - 2014",
+                      "Log household income (affected workers) - 2015",
+                      "Log household income (affected workers) - 2016",
+                      "Share affected workers with multipe jobs - 2012",
+                      "Share affected workers with multipe jobs - 2013",
+                      "Share affected workers with multipe jobs - 2014",
+                      "Share affected workers with multipe jobs - 2015",
+                      "Share affected workers with multipe jobs - 2016")) %>%
+  rename(`Real Oregon` = "41",
+         `Synthetic Oregon` = "synthetic_41",
+         `Unweighted Donor Sample` = "donor_sample")
+
+stargazer(balance_table, 
+          type = "latex",
+          summary = F, 
+          rownames = FALSE,
+          
+          out = "~/repo/fair_work/analysis/output/balance_table.tex")
+
+reg_table <-
+  tibble(` ` = c("Average treatment effect", "RMSPE p-value"),
+         `Log household income` = c(treat_inc, pval_inc),
+         `Share working multiple jobs` = c(treat_nj, pval_nj)) %>%
+  mutate(across(c(`Log household income`, `Share working multiple jobs`), ~round(.x, digits = 4)))
+
+stargazer(reg_table, 
+          type = "latex",
+          summary = F, 
+          rownames = FALSE,
+          out = "~/repo/fair_work/analysis/output/ate_table.tex")
+
