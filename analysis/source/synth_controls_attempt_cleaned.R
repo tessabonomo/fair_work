@@ -183,7 +183,8 @@ df_agg_hh_asec <-
 df_agg_hh_affected_asec <-
   df_industry_workers_asec %>%
   group_by(statefip, effective_year) %>%
-  summarise(ln_income_industry = weighted.mean(ln_income, asecwth))
+  summarise(ln_income_industry = weighted.mean(ln_income, asecwth),
+            n())
 
 #-------------------------------------------------------------------------------
 ### March Basic aggregation (num jobs, unemployment rates)
@@ -252,8 +253,7 @@ df_agg <-
   mutate(statefip = as.character(statefip)) %>%
   group_by(statefip) %>%
   filter(n() == n_years) %>%
-  filter(!(statefip %in% c(36, 6, 53, 42, 17)))
-
+  filter(!(statefip %in% c(36, 6, 53)))
 
 #-------------------------------------------------------------------------------
 
@@ -376,8 +376,8 @@ t <-
   synthetic_oregon_income %>% grab_signficance() 
 
 ggplot(t, aes(x = mspe_ratio))+
-  geom_histogram(bins = 100) +
-  geom_vline(xintercept = 28.5862559, color = "black", linetype = 2) +
+  geom_histogram(bins = 50) +
+  geom_vline(xintercept = 5.44655880, color = "black", linetype = 2) +
   theme_minimal() +
   ylab("Frequency") +
   xlab("RMSPE")
@@ -424,7 +424,7 @@ synth_func_numjobs <- function(state, predictors){
     generate_predictor(time_window = 2016,
                        numjobs_2016 = more_than_one_job) %>%
     generate_weights(optimization_window = 2012:2016, # time to use in the optimization task
-                     # margin_ipop = .02,sigf_ipop = 7,bound_ipop = 6 # optimizer options
+                      margin_ipop = .02,sigf_ipop = 7,bound_ipop = 6 # optimizer options
     ) %>%
     generate_control()
   
@@ -514,19 +514,23 @@ pval_nj <-
   pull
 
 ggplot(t, aes(x = mspe_ratio))+
-  geom_histogram(bins = 100) +
-  geom_vline(xintercept = 12.32106869, color = "black", linetype = 2) +
+  geom_histogram(bins = 50) +
+  geom_vline(xintercept = 13.44680396,
+             color = "black", linetype = 2) +
   theme_minimal() +
   ylab("Frequency") +
-  xlab("RMSPE")
+  xlab("RMSPE") 
 
 
 #Ballance output
 
 balance_table <-
   balance_table_income %>%
-  bind_rows(balance_table_numjobs %>% filter(str_detect(variable, "^num"))) %>%
-  mutate(across(c("41", "synthetic_41", "donor_sample"), ~round(.x, digits = 3))) %>%
+  full_join(balance_table_numjobs %>%
+              rename(synthetic_jobs = "synthetic_41")) %>%
+  select(c("variable","41", "synthetic_41", "synthetic_jobs","donor_sample")) %>%
+  mutate(across(c("41", "synthetic_41", "synthetic_jobs","donor_sample"),
+                ~round(.x, digits = 3))) %>%
   rename(Variable = "variable") %>%
   mutate(Variable = c("Share workers in affected industry",
                       "Log household income (all workers)",
@@ -542,7 +546,8 @@ balance_table <-
                       "Share affected workers with multipe jobs - 2015",
                       "Share affected workers with multipe jobs - 2016")) %>%
   rename(`Real Oregon` = "41",
-         `Synthetic Oregon` = "synthetic_41",
+         `Synthetic Oregon (income)` = "synthetic_41",
+         `Synthetic Oregon (jobs)` = "synthetic_jobs",
          `Unweighted Donor Sample` = "donor_sample")
 
 stargazer(balance_table, 
